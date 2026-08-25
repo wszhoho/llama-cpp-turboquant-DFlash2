@@ -75,13 +75,20 @@ Wants=network-online.target
 Type=simple
 User=llama
 Group=llama
-WorkingDirectory=/opt/llama-cpp-turboquant
+WorkingDirectory=/opt/llama-cpp-turboquant-DFlash2
 # 指向本 fork 构建出的 llama-server 可执行文件
-ExecStart=/opt/llama-cpp-turboquant/build/bin/llama-server \
+ExecStart=/opt/llama-cpp-turboquant-DFlash2/build/bin/llama-server \
     --model /models/your-model.gguf \
     --host 127.0.0.1 --port 8080 \
     --cache-type-k turbo3 --cache-type-v turbo3 \
     --n-gpu-layers 999
+# 可选：DFlash / DSpark 草稿模型（投机解码）
+#   --spec-type draft-dflash       DFlash 草稿
+#   --spec-type draft-dspark       DSpark 草稿（DFlash + 马尔可夫头）
+    --spec-draft-model /models/your-dflash-draft.gguf \
+    --spec-type draft-dflash \
+    --spec-draft-ngl all \
+    --spec-draft-n-max 8
 # 可选：校准 InnerQ 通道缩放，N 为校准 token 数
 Environment=TURBO_INNERQ=4096
 Restart=on-failure
@@ -112,6 +119,7 @@ sudo systemctl restart llama-server
 - 服务默认监听 `127.0.0.1:8080`。如需远程访问，请在前面加反向代理（nginx/Caddy）——**不要把 API 密钥或 Token 写进 unit 文件**；若服务确实需要密钥，用仅管理员可读的 `EnvironmentFile=`，或更推荐放在客户端侧。
 - 多 GPU 环境可用 `Environment=CUDA_VISIBLE_DEVICES=0,1` 指定设备。
 - `ExecStart` 中的每个参数与 `llama-server` 命令行选项一一对应（如 `--cache-type-k turbo3`），详见 `llama-server --help`。
+- 草稿模型说明：`--spec-type` 可省略——省略时 llama-server 会从草稿 GGUF 元数据自动识别 DFlash/DSpark。草稿模型自己的 KV 缓存可用 `--cache-type-k-draft turbo3 --cache-type-v-draft turbo3` 单独配置；GPU 卸载层数用 `--spec-draft-ngl`（`-ngld`）调节，默认 `auto`。
 
 ## 构建
 

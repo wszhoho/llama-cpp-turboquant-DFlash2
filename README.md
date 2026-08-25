@@ -75,13 +75,20 @@ Wants=network-online.target
 Type=simple
 User=llama
 Group=llama
-WorkingDirectory=/opt/llama-cpp-turboquant
+WorkingDirectory=/opt/llama-cpp-turboquant-DFlash2
 # point ExecStart at the llama-server binary built from this fork
-ExecStart=/opt/llama-cpp-turboquant/build/bin/llama-server \
+ExecStart=/opt/llama-cpp-turboquant-DFlash2/build/bin/llama-server \
     --model /models/your-model.gguf \
     --host 127.0.0.1 --port 8080 \
     --cache-type-k turbo3 --cache-type-v turbo3 \
     --n-gpu-layers 999
+# optional: DFlash / DSpark draft model for speculative decoding
+#   --spec-type draft-dflash       DFlash draft
+#   --spec-type draft-dspark       DSpark draft (DFlash + Markov head)
+    --spec-draft-model /models/your-dflash-draft.gguf \
+    --spec-type draft-dflash \
+    --spec-draft-ngl all \
+    --spec-draft-n-max 8
 # optional: calibrate InnerQ channel scales, N = calibration tokens
 Environment=TURBO_INNERQ=4096
 Restart=on-failure
@@ -112,6 +119,7 @@ Notes:
 - The service binds to `127.0.0.1:8080` by default. If you need remote access, put a reverse proxy (nginx/Caddy) in front - do **not** put API keys or tokens in the unit file; use `EnvironmentFile=` (root-only readable) if the server itself needs secrets, or better keep them client-side.
 - For multi-GPU setups you can pin devices via `Environment=CUDA_VISIBLE_DEVICES=0,1`.
 - Every `ExecStart` flag maps 1:1 to a `llama-server` CLI option (`--cache-type-k turbo3` etc.), see `llama-server --help`.
+- Draft model notes: `--spec-type` is optional - llama-server auto-detects DFlash/DSpark from the draft GGUF metadata when omitted. Control the draft's own KV cache the same way as the target model with `--cache-type-k-draft turbo3 --cache-type-v-draft turbo3`, and tune GPU offload via `--spec-draft-ngl` (`-ngld`), default `auto`.
 
 ## Build
 
