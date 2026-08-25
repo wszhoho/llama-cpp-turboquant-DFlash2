@@ -61,6 +61,58 @@ python convert_hf_to_gguf.py <草案模型目录> --target-model-dir <目标模�
 
 除 fork 特性外，代码库与上游 llama.cpp 保持同步，因此完整模型集合（Qwen3.5、Gemma4、Kimi-K3 等）与全部后端（CUDA、Vulkan、SYCL、OpenCL、Metal、WebGPU、Hexagon HTP、CANN、OpenVINO）均可用。
 
+## 以 systemd 服务运行（Linux）
+
+创建 `/etc/systemd/system/llama-server.service`（按你的环境调整用户、路径、模型与参数）：
+
+```ini
+[Unit]
+Description=llama-server（TurboQuant fork）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=llama
+Group=llama
+WorkingDirectory=/opt/llama-cpp-turboquant
+# 指向本 fork 构建出的 llama-server 可执行文件
+ExecStart=/opt/llama-cpp-turboquant/build/bin/llama-server \
+    --model /models/your-model.gguf \
+    --host 127.0.0.1 --port 8080 \
+    --cache-type-k turbo3 --cache-type-v turbo3 \
+    --n-gpu-layers 999
+# 可选：校准 InnerQ 通道缩放，N 为校准 token 数
+Environment=TURBO_INNERQ=4096
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+```
+
+然后启用并启动：
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now llama-server
+sudo systemctl status llama-server
+journalctl -u llama-server -f     # 持续查看服务日志
+```
+
+常用操作：
+
+```sh
+sudo systemctl stop llama-server
+sudo systemctl restart llama-server
+```
+
+注意事项：
+- 服务默认监听 `127.0.0.1:8080`。如需远程访问，请在前面加反向代理（nginx/Caddy）——**不要把 API 密钥或 Token 写进 unit 文件**；若服务确实需要密钥，用仅管理员可读的 `EnvironmentFile=`，或更推荐放在客户端侧。
+- 多 GPU 环境可用 `Environment=CUDA_VISIBLE_DEVICES=0,1` 指定设备。
+- `ExecStart` 中的每个参数与 `llama-server` 命令行选项一一对应（如 `--cache-type-k turbo3`），详见 `llama-server --help`。
+
 ## 构建
 
 参考上游[构建指南](docs/build.md)与[服务器文档](tools/server/README.md)。TurboQuant 内核的主要后端为 CUDA：

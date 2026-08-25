@@ -61,6 +61,58 @@ python convert_hf_to_gguf.py <draft-model-dir> --target-model-dir <target-model-
 
 On top of the fork features, the codebase tracks upstream llama.cpp closely, so the entire model zoo (Qwen3.5, Gemma4, Kimi-K3, ...) and all backends (CUDA, Vulkan, SYCL, OpenCL, Metal, WebGPU, Hexagon HTP, CANN, OpenVINO) remain available.
 
+## Run as a systemd service (Linux)
+
+Create `/etc/systemd/system/llama-server.service` (adjust user, paths, model and flags to your setup):
+
+```ini
+[Unit]
+Description=llama-server (TurboQuant fork)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=llama
+Group=llama
+WorkingDirectory=/opt/llama-cpp-turboquant
+# point ExecStart at the llama-server binary built from this fork
+ExecStart=/opt/llama-cpp-turboquant/build/bin/llama-server \
+    --model /models/your-model.gguf \
+    --host 127.0.0.1 --port 8080 \
+    --cache-type-k turbo3 --cache-type-v turbo3 \
+    --n-gpu-layers 999
+# optional: calibrate InnerQ channel scales, N = calibration tokens
+Environment=TURBO_INNERQ=4096
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start it:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now llama-server
+sudo systemctl status llama-server
+journalctl -u llama-server -f     # follow server logs
+```
+
+Common operations:
+
+```sh
+sudo systemctl stop llama-server
+sudo systemctl restart llama-server
+```
+
+Notes:
+- The service binds to `127.0.0.1:8080` by default. If you need remote access, put a reverse proxy (nginx/Caddy) in front - do **not** put API keys or tokens in the unit file; use `EnvironmentFile=` (root-only readable) if the server itself needs secrets, or better keep them client-side.
+- For multi-GPU setups you can pin devices via `Environment=CUDA_VISIBLE_DEVICES=0,1`.
+- Every `ExecStart` flag maps 1:1 to a `llama-server` CLI option (`--cache-type-k turbo3` etc.), see `llama-server --help`.
+
 ## Build
 
 See the upstream [build guide](docs/build.md) and the [server docs](tools/server/README.md). CUDA is the primary backend for the TurboQuant kernels:
