@@ -1,126 +1,86 @@
-# llama.cpp
+# llama-cpp-turboquant-DFlash2
 
-![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
+LLM inference in C/C++ - a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) focused on **extreme KV-cache compression (TurboQuant)** and **fast speculative decoding (DFlash / DFlash2 / DSpark)** for DeepSeek-V4 class models.
 
-<div align="center">
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-<b>LLM inference in C/C++</b>
+---
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp?filter=v*)](https://github.com/ggml-org/llama.cpp/releases?q=tag:v0)
-[![Nightly](https://img.shields.io/github/v/release/ggml-org/llama.cpp?label=nightly)](https://github.com/ggml-org/llama.cpp/releases)
-[![Server](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml/badge.svg)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
-[![Docker](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/docker.yml?label=Docker)](https://github.com/ggml-org/llama.cpp/actions/workflows/docker.yml)
-[![Winget](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/winget.yml?label=Winget)](https://github.com/ggml-org/llama.cpp/actions/workflows/winget.yml)
+## Highlights
 
-[manifesto](https://github.com/ggml-org/llama.cpp/discussions/205) / [ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md) / [maintainer PRs](https://github.com/ggml-org/llama.cpp/issues?q=is%3Apr%20is%3Aopen%20draft%3AFalse%20(author%3Argerganov%20OR%20author%3AKitaitiMakoto%20OR%20author%3Adanbev%20OR%20author%3Aaldehir%20OR%20author%3Amax-krasnyansky%20OR%20author%3ACISC%20OR%20author%3Aggerganov%20OR%20author%3Aam17an%20OR%20author%3Abartowski1182%20OR%20author%3Ahipudding%20OR%20author%3AServeurpersoCom%20OR%20author%3Apwilkin%20OR%20author%3Areeselevine%20OR%20author%3Angxson%20OR%20author%3Ajeffbolznv%20OR%20author%3A0cc4m%20OR%20author%3Aangt%20OR%20author%3AIMbackK%20OR%20author%3Aarthw%20OR%20author%3AJohannesGaessler%20OR%20author%3AORippler%20OR%20author%3Aruixiang63%20OR%20author%3Axctan%20OR%20author%3Aallozaur%20OR%20author%3Ayomaytk%20OR%20author%3Aaendk%20OR%20author%3Agaugarg-nv%20OR%20author%3Ataronaeo%20OR%20author%3Aforforever73%20OR%20author%3Alhez%20OR%20author%3Anetrunnereve%20OR%20author%3Afairydreaming)%20sort%3Aupdated-desc) / [compile times](https://github.com/ggml-org/llama.cpp-dev/blob/master/README-compile-times.md) / [lib llama API](https://github.com/ggml-org/llama.cpp/issues/9289) / [llama-server REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
+### 1. TurboQuant - KV-cache quantization down to 2-bit
 
-</div>
+KV cache is usually the memory bottleneck for long-context inference. TurboQuant compresses it aggressively with a **WHT rotation + PolarQuant** scheme (based on [arXiv 2504.19874](https://arxiv.org/abs/2504.19874), ICLR 2026), adding three new GGUF types:
 
-## Quick start
+| Type | Bits | GGML enum | CLI name |
+|------|------|-----------|----------|
+| TURBO2_0 | 2-bit | `GGML_TYPE_TURBO2_0` (43) | `turbo2` |
+| TURBO3_0 | 3-bit | `GGML_TYPE_TURBO3_0` (44) | `turbo3` |
+| TURBO4_0 | 4-bit | `GGML_TYPE_TURBO4_0` (45) | `turbo4` |
 
-A few options to get `llama.cpp` installed on your machine:
+Key implementation points (CUDA, `ggml/src/ggml-cuda/`):
 
-- Visit https://llama.app and follow the instructions
-- Run with Docker - see our [Docker documentation](docs/docker.md)
-- Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
-- Build from source by cloning this repository - check out [our build guide](docs/build.md)
+- **WHT rotation** - Fast Walsh-Hadamard Transform (128/64 elements) with two seed-42 sign arrays, spreads outliers before quantization (`turbo-wht.cu/h`)
+- **Lloyd-Max centroids** - 2/3/4-bit codebooks optimized for the `N(0, 1/128)` distribution (`turbo-quant.cuh`)
+- **InnerQ channel equalization** (`TURBO_INNERQ=N` env var, N = calibration tokens) - per-channel variance equalization that preserves the dot product `<Q/s, s*K> = <Q, K>` (`turbo-innerq.cu/h`)
+- **Fused Flash Attention** - `turbo2/3/4` KV types supported directly in the FA kernels, with 21 generated template instances combing turbo/f16/q8_0 pairs (`template-instances/`)
+- **CPU support** - scalar vec-dot and the WHT op (`ggml_compute_forward_turbo_wht`) so the types also run without a GPU
 
-Once installed:
+Enable via the standard cache-type flags:
 
 ```sh
-# Download and run a model directly from Hugging Face
-llama cli -hf ggml-org/Qwen3.5-0.8B-GGUF
+llama-cli -m model.gguf -n 512 --cache-type-k turbo3 --cache-type-v turbo3
 
-# Launch OpenAI-compatible API server
-llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
+# optionally calibrate InnerQ channel scales with a few thousand tokens
+TURBO_INNERQ=4096 llama-cli -m model.gguf -n 512 --cache-type-k turbo3 --cache-type-v turbo3
 ```
 
-<table align="center">
-    <tr>
-        <td align="center" width=50%>
-            <img width="1310" height="888" alt="VLM session with `llama cli`" src="https://github.com/user-attachments/assets/88726b48-1713-48aa-a525-95a02e78afc4" />
-            <i>VLM session with <b>llama cli</b></i>
-        </td>
-        <td align="center">
-            <img width="1392" height="958" alt="Built-in web UI against `llama serve` running Qwen 3.6" src="https://github.com/user-attachments/assets/b402f972-2e32-4def-8771-8d849f08cf2e" />
-            <i>Built-in web UI against <b>llama serve</b></i>
-        </td>
-    </tr>
-<table>
+### 2. DFlash / DFlash2 / DSpark - speculative decoding drafts
 
-## Description
+DFlash is a *draft* model architecture that predicts the next tokens of a target model (e.g. DeepSeek-V4) from a small number of extracted target hidden states, enabling fast speculative decoding with a cheap draft pass.
 
-The main goal of `llama.cpp` is to enable LLM (and VLM) inference with minimal setup and state-of-the-art performance on
-a wide range of hardware - locally and in the cloud.
+- **DFlash** - encoder-decoder draft: a feature-fusion layer (`fc` + norm) maps extracted target-layer features into the draft embedding space (`src/models/dflash.cpp`)
+- **DFlash2** - adds a temporal **convolution** + **selector** head (`conv_kernel_size`, `conv_group_size`, `selector_rank`, `selector_top_k` in GGUF metadata) for higher acceptance rates
+- **DSpark** - DFlash + a semi-autoregressive **Markov head** and a **confidence head**, optionally running full DeepSeek-V4 blocks with a uniform sliding-window draft KV ring (`llama-kv-cache-dsv4.cpp`)
+- **Reduced-vocab drafts** - a `d2t` mapping lets drafts use a small vocab and map results back to target token ids
 
-- Plain C/C++ implementation without any dependencies
-- Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
-- AVX, AVX2, AVX512 and AMX support for x86 architectures
-- RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
-- 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
-- Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
-- Vulkan and SYCL backend support
-- CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
+Converting a DFlash draft requires the target model directory (to reuse its tokenizer/vocab):
 
-The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-org/ggml) library.
+```sh
+python convert_hf_to_gguf.py <draft-model-dir> --target-model-dir <target-model-dir> --outfile dflash-draft.gguf
+```
 
-## Supported backends
+### 3. DeepSeek-V4 ecosystem support
 
-| Backend | Target devices |
-| --- | --- |
-| [BLAS](docs/build.md#blas-build) | All |
-| [BLIS](docs/backend/BLIS.md) | All |
-| [CANN](docs/build.md#cann) | Ascend NPU |
-| [CUDA](docs/build.md#cuda) | Nvidia GPU |
-| [HIP](docs/build.md#hip) | AMD GPU |
-| [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
-| [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
-| [MUSA](docs/build.md#musa) | Moore Threads GPU |
-| [Metal](docs/build.md#metal-build) | Apple Silicon |
-| [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
-| [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs |
-| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
-| [SYCL](docs/backend/SYCL.md) | Intel GPU |
-| [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
-| [Vulkan](docs/build.md#vulkan) | GPU |
-| [WebGPU](docs/build.md#webgpu) | All |
-| [ZenDNN](docs/build.md#zendnn) | AMD CPU |
+- Model graphs: `deepseek.cpp`, `deepseek2.cpp`, `deepseek2ocr.cpp`, `deepseek32.cpp`, `deepseek4.cpp`, `dflash.cpp`
+- HF conversion (`conversion/deepseek.py`): DeepSeek OCR / V2 / V3.2 / V4 (incl. FP8 dequant) / V4-DSpark
+- Dedicated KV-cache variants: `llama-kv-cache-dsv4.cpp` (draft ring), `llama-kv-cache-iswa.cpp` (interleaved sliding window), `llama-kv-cache-dsa.cpp`, `llama-kv-cache-msa.cpp`
+- Chat template helpers for V3.2/V4, incl. thinking-retention and tool-result ordering (`common/chat.cpp`)
 
-## Documentation
+---
 
-#### Tools
+On top of the fork features, the codebase tracks upstream llama.cpp closely, so the entire model zoo (Qwen3.5, Gemma4, Kimi-K3, ...) and all backends (CUDA, Vulkan, SYCL, OpenCL, Metal, WebGPU, Hexagon HTP, CANN, OpenVINO) remain available.
 
-- [cli](tools/cli/README.md)
-- [completion](tools/completion/README.md)
-- [server](tools/server/README.md)
-- [GBNF grammars](grammars/README.md)
+## Build
 
-#### Development
+See the upstream [build guide](docs/build.md) and the [server docs](tools/server/README.md). CUDA is the primary backend for the TurboQuant kernels:
 
-- [How to build](docs/build.md)
-- [Running on Docker](docs/docker.md)
-- [Build on Android](docs/android.md)
-- [Multi-GPU usage](docs/multi-gpu.md)
-- [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
-- [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
-- [XCFramework](docs/xcframework.md)
-- [Completions](docs/completions.md)
-- [Models](docs/models.md)
-- [Release process](docs/release.md)
+```sh
+cmake -B build -DGGML_CUDA=ON && cmake --build build --config Release -j
+```
 
-## Contributing
+## Repository layout
 
-- Contributors can open PRs
-- Collaborators will be invited based on contributions
-- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
-- Any help with managing issues, PRs and projects is very appreciated!
-- Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
+```
+ggml/src/ggml-cuda/     TurboQuant kernels (turbo-quant, turbo-innerq, turbo-wht, set-rows, fattn)
+src/models/dflash.cpp   DFlash / DFlash2 / DSpark graph implementation
+src/models/deepseek*.cpp DeepSeek V2/V3.2/V4 (+OCR) graphs
+src/llama-kv-cache-*.cpp Dedicated KV-cache variants (dsv4 / iswa / dsa / msa)
+conversion/deepseek.py  DeepSeek family HF -> GGUF converters
+conversion/qwen.py      DFlash draft converter (register: DFlashDraftModel / DFlash2DraftModel)
+common/chat.cpp         DeepSeek chat-template helpers
+```
 
-## Acknowledgements
+## License
 
-- [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
-- [nothings/stb](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
-- [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
-- [mackron/miniaudio](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
-- [sheredom/subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+MIT - see [LICENSE](LICENSE). This project is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT).
