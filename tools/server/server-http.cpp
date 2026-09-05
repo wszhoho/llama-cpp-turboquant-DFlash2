@@ -245,7 +245,7 @@ bool server_http_context::init(const common_params & params) {
             "application/json; charset=utf-8"
         );
 
-        SRV_WRN("%s", "unauthorized: Invalid API Key\n");
+        SRV_WRN("unauthorized: Invalid API Key from %s\n", req.remote_addr.c_str());
 
         return false;
     };
